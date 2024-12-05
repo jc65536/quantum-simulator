@@ -1,27 +1,26 @@
-use std::fs::File;
+use std::{env, fs::File};
 
-use parse::parse_file;
-use state::State;
-
+mod ampl;
+mod bitvec;
 mod parse;
 mod prog;
 mod state;
 
+use parse::parse;
+use state::State;
+
 fn main() {
-    let f = File::open("tests/miller_11.qasm").unwrap();
+    let f = File::open(env::args().skip(1).next().unwrap()).unwrap();
 
-    let prog = parse_file(f);
+    let prog = parse(f).unwrap();
 
-    let mut state = State::init(prog.qreg);
+    let statevec = prog
+        .instrs
+        .iter()
+        .fold(State::init(prog.qreg_used), |state, &ins| state.apply(ins))
+        .to_statevec();
 
-    for i in prog.instrs {
-        println!("{i:?}");
-        state = state.apply(i);
-
-        for w in &state.0 {
-            println!("{w}");
-        }
-
-        println!("=================");
-    }
+    println!("========================================");
+    println!("State vector:");
+    println!("{statevec:?}")
 }

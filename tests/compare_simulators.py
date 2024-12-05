@@ -6,7 +6,7 @@ from pathlib import Path
 
 # Import your simulate function here.
 # cs238 can be a file, a folder with an __init__.py file,
-# from cs238 import simulate
+from cs238 import simulate
 
 
 def cirq_simulate(qasm_string: str) -> list:
@@ -51,6 +51,8 @@ for qasm_file in qasm_dir.glob("**/*.qasm"):
     # read the qasm file
     with open(qasm_file, "r") as f:
         qasm_string = f.read()
+    
+    print(qasm_file.name)
 
     # run your simulate function on the qasm string
     state_vector = simulate(qasm_string)

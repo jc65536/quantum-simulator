@@ -1,31 +1,23 @@
-use std::{
-    fs::File,
-    io::{BufRead, BufReader},
-    str::FromStr,
-};
+use std::{collections::HashSet, io::{BufRead, BufReader, Read}};
 
 use regex::Regex;
 
 use crate::prog::{Ins, Prog};
 
-fn capture<T: FromStr>(re: &Regex, s: &str) -> T {
-    // println!("{s}");
-    re.captures(s.trim()).unwrap()[1]
-        .parse()
-        .ok()
-        .expect("capture error")
+fn capture(re: &Regex, s: &str) -> u32 {
+    re.captures(s.trim()).unwrap()[1].parse().unwrap()
 }
 
 fn split_head(s: &str) -> (&str, &str) {
     let mut split = s.split_whitespace();
-    (split.next().expect("head 1"), split.next().expect("head 2"))
+    (split.next().unwrap(), split.next().unwrap())
 }
 
-pub fn parse_file(file: File) -> Prog {
-    let re_qreg: Regex = Regex::new(r"q\[(\d+)]").unwrap();
-    let re_creg: Regex = Regex::new(r"c\[(\d+)]").unwrap();
+pub fn parse<R: Read>(input: R) -> Result<Prog, &'static str> {
+    let re_qreg: Regex = Regex::new(r"q\[(\d+)\]").unwrap();
+    let re_creg: Regex = Regex::new(r"c\[(\d+)\]").unwrap();
 
-    let reader = BufReader::new(file);
+    let reader = BufReader::new(input);
 
     let mut lines = reader
         .split(b';')
@@ -35,39 +27,53 @@ pub fn parse_file(file: File) -> Prog {
     lines
         .next()
         .filter(|line| line == "OPENQASM 2.0")
-        .expect("openqasm error");
+        .ok_or("openqasm error")?;
 
     lines
         .next()
         .filter(|line| line == "include \"qelib1.inc\"")
-        .expect("include error");
+        .ok_or("include error")?;
 
     let qreg: u32 = match split_head(&lines.next().unwrap()) {
         ("qreg", s) => capture(&re_qreg, s),
-        _ => panic!("qreg"),
+        _ => return Err("qreg error"),
     };
 
     let creg: u32 = match split_head(&lines.next().unwrap()) {
         ("creg", s) => capture(&re_creg, s),
-        _ => panic!("creg"),
+        _ => return Err("creg error"),
     };
 
-    let instrs = lines
-        .map(|line| match split_head(&line) {
-            ("h", s) => Ins::H(capture(&re_qreg, s)),
-            ("x", s) => Ins::X(capture(&re_qreg, s)),
-            ("t", s) => Ins::T(capture(&re_qreg, s)),
-            ("tdg", s) => Ins::Tdg(capture(&re_qreg, s)),
+    let mut instrs = Vec::new();
+    let mut qreg_used = HashSet::new();
+
+    let mut capture_qreg = |s: &str| {
+        let i = capture(&re_qreg, s);
+        qreg_used.insert(i);
+        i
+    };
+
+    for line in lines {
+        instrs.push(match split_head(&line) {
+            ("h", s) => Ins::H(capture_qreg(s)),
+            ("x", s) => Ins::X(capture_qreg(s)),
+            ("t", s) => Ins::T(capture_qreg(s)),
+            ("tdg", s) => Ins::Tdg(capture_qreg(s)),
             ("cx", s) => {
                 let mut split = s.split(",");
                 Ins::Cx(
-                    capture(&re_qreg, split.next().expect("split")),
-                    capture(&re_qreg, split.next().expect("split")),
+                    capture_qreg(split.next().unwrap()),
+                    capture_qreg(split.next().unwrap()),
                 )
             }
-            _ => panic!("invalid instr"),
-        })
-        .collect();
+            _ => return Err("invalid instruction"),
+        });
+    }
 
-    Prog { qreg, creg, instrs }
+    Ok(Prog {
+        qreg,
+        qreg_used: qreg_used.len() as u32,
+        creg,
+        instrs,
+    })
 }

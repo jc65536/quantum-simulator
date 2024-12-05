@@ -10,6 +10,7 @@ pub enum Ins {
 #[derive(Debug)]
 pub struct Prog {
     pub qreg: u32,
+    pub qreg_used: u32,
     pub creg: u32,
     pub instrs: Vec<Ins>,
 }

@@ -1,87 +1,11 @@
 use core::f64;
-use std::{
-    collections::HashMap,
-    fmt::Display,
-    hash::Hash,
-    ops::{Add, AddAssign, Neg, Sub},
-};
+use std::{collections::HashMap, env, fmt::Display};
 
-use crate::prog::Ins;
+use num_complex::Complex64;
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-struct BitVec(u32);
+use crate::{ampl::Ampl, bitvec::BitVec, prog::Ins};
 
-impl BitVec {
-    fn get_bit(&self, i: u32) -> u32 {
-        self.0 >> i & 1
-    }
-
-    fn set_bit(&self, i: u32, b: u32) -> Self {
-        Self(self.0 & !(1 << i) | b << i)
-    }
-
-    fn flip_bit(&self, i: u32) -> Self {
-        Self(self.0 ^ 1 << i)
-    }
-
-    pub fn to_vec(&self, n: u32) -> Vec<u32> {
-        (0..n).map(|i| self.get_bit(i)).collect()
-    }
-}
-
-#[derive(Clone, Copy, PartialEq)]
-/// Ampl(a, b) = a + b * sqrt(2)
-struct Ampl(i32, i32);
-
-impl Ampl {
-    fn div_sqrt2(self) -> Self {
-        Ampl(self.1, self.0 / 2)
-    }
-
-    fn is_zero(self) -> bool {
-        self.0 == 0 && self.1 == 0
-    }
-
-    fn to_float(self) -> f64 {
-        self.0 as f64 + self.1 as f64 * 2f64.sqrt()
-    }
-}
-
-impl Add for Ampl {
-    type Output = Ampl;
-
-    fn add(self, rhs: Self) -> Self::Output {
-        Ampl(self.0 + rhs.0, self.1 + rhs.1)
-    }
-}
-
-impl AddAssign for Ampl {
-    fn add_assign(&mut self, rhs: Self) {
-        *self = *self + rhs;
-    }
-}
-
-impl Neg for Ampl {
-    type Output = Ampl;
-
-    fn neg(self) -> Self::Output {
-        Ampl(-self.0, -self.1)
-    }
-}
-
-impl Sub for Ampl {
-    type Output = Ampl;
-
-    fn sub(self, rhs: Self) -> Self::Output {
-        self + (-rhs)
-    }
-}
-
-impl PartialOrd for Ampl {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.to_float().partial_cmp(&other.to_float())
-    }
-}
+pub struct NbitWorld<'a>(u32, &'a World);
 
 pub struct World {
     /// Counts fractions of 2 ** (-n / 2) where n is number of qubits
@@ -113,23 +37,27 @@ impl World {
                     vec: self.vec.set_bit(i, 0),
                 },
                 Self {
-                    ampl: -self.ampl.div_sqrt2(),
-                    phase: self.phase,
+                    ampl: self.ampl.div_sqrt2(),
+                    phase: (self.phase + 4 * self.vec.get_bit(i)) % 8,
                     vec: self.vec.set_bit(i, 1),
                 },
             ],
+
             Ins::X(i) => vec![Self {
                 vec: self.vec.flip_bit(i),
                 ..self
             }],
+
             Ins::T(i) => vec![Self {
                 phase: (self.phase + self.vec.get_bit(i)) % 8,
                 ..self
             }],
+
             Ins::Tdg(i) => vec![Self {
-                phase: (self.phase + self.vec.get_bit(i) * 7) % 8,
+                phase: (self.phase + 7 * self.vec.get_bit(i)) % 8,
                 ..self
             }],
+
             Ins::Cx(c, t) => vec![Self {
                 vec: if self.vec.get_bit(c) == 1 {
                     self.vec.flip_bit(t)
@@ -140,31 +68,54 @@ impl World {
             }],
         }
     }
+
+    pub fn bits(&self, n: u32) -> NbitWorld {
+        NbitWorld(n, self)
+    }
 }
 
-impl Display for World {
+impl Display for NbitWorld<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let &Self(n, w) = self;
+        let ampl = w.ampl.to_f64() / 2f64.powf(n as f64 / 2.0);
+        let phase = w.phase as f64 * f64::consts::PI / 4.0;
+        let x: f64 = ampl * f64::cos(phase);
+        let y: f64 = ampl * f64::sin(phase);
         write!(
             f,
-            "Ampl: {:.3}, Phase: {} * pi / 4, Vec: |{}>",
-            self.ampl.to_float(),
-            self.phase,
-            self.vec.to_vec(16).into_iter().map(|b| b.to_string()).collect::<Vec<_>>().join(""),
+            "Ampl: {ampl:.3} * exp(i * {}pi / 4) = {x:.3} + {y:.3}i, Vec: |{}> = |{}>",
+            w.phase,
+            w.vec.to_be_string(n),
+            w.vec.to_be_u64(n),
         )
     }
 }
 
-pub struct State(pub Vec<World>);
+pub struct State {
+    pub n: u32,
+    pub worlds: Vec<World>,
+}
 
 impl State {
     pub fn init(n: u32) -> Self {
-        Self(vec![World::init(n)])
+        Self {
+            n,
+            worlds: vec![World::init(n)],
+        }
     }
 
     pub fn apply(self, ins: Ins) -> Self {
+        let print_steps = env::var("PRINT_STEPS").is_ok_and(|s| !s.is_empty());
+
+        if print_steps {
+            println!("========================================");
+            println!("Instruction: {:?}", ins);
+        }
+
         let mut compact_map: HashMap<BitVec, [Ampl; 8]> = HashMap::new();
 
-        for w_new in self.0.into_iter().flat_map(|w| w.apply(ins)) {
+        // Collect worlds by bit vector
+        for w_new in self.worlds.into_iter().flat_map(|w| w.apply(ins)) {
             compact_map
                 .entry(w_new.vec)
                 .and_modify(|arr| arr[w_new.phase as usize] += w_new.ampl)
@@ -175,6 +126,7 @@ impl State {
                 });
         }
 
+        // Combine worlds with same bit vector and compatible phase
         let worlds: Vec<World> = compact_map
             .into_iter()
             .flat_map(|(vec, arr)| {
@@ -183,16 +135,10 @@ impl State {
                     let a2 = arr[(i + 4) % 8];
                     if a1 == a2 {
                         None
-                    } else if a1 > a2 {
+                    } else {
                         Some(World {
                             ampl: a1 - a2,
                             phase: i as u32,
-                            vec,
-                        })
-                    } else {
-                        Some(World {
-                            ampl: a2 - a1,
-                            phase: (i as u32 + 4) % 8,
                             vec,
                         })
                     }
@@ -200,6 +146,23 @@ impl State {
             })
             .collect();
 
-        Self(worlds)
+        if print_steps {
+            for w in &worlds {
+                println!("{}", w.bits(self.n));
+            }
+        }
+
+        Self { worlds, ..self }
+    }
+
+    pub fn to_statevec(self) -> Vec<Complex64> {
+        let mut ret = vec![Complex64::ZERO; 2usize.pow(self.n)];
+        for w in self.worlds {
+            ret[w.vec.to_be_u64(self.n) as usize] = Complex64::from_polar(
+                w.ampl.to_f64() / 2f64.powf(self.n as f64 / 2.0),
+                (w.phase as f64) * f64::consts::PI / 4.0,
+            );
+        }
+        ret
     }
 }
