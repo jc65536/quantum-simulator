@@ -6,8 +6,12 @@ The code is available at https://github.com/jc65536/quantum-simulator
 ## Design
 
 My design supports up to 64 qubits, since `BitVec` is a `u64`. I made sure my
-amplitudes were also using `u64`, so that they are long enough to represent
-amplitudes up to and including $2^{64 / 2}$.
+amplitudes were also using `i64`, so that they are long enough to represent
+amplitudes up to and including $2^{64 / 2}$. I am using an integer to represent
+amplitudes because the integer counts multiples of $2^{-n / 2}$. This
+representation scheme exploits the fact that we are operating on a limited
+instruction set that only supports phase rotations by $\pi / 4$. By doing this,
+I can avoid floating point errors.
 
 The actual number of qubits $n$ is determined from the program. I realized
 that cirq doesn't actually care about the `qreg` statement, but counts the
@@ -56,5 +60,7 @@ simulate("quantum program here")
 ### How to understand the output
 
 The output of `cs238.simulate` is compatible with that of `cirq`. This means
-that qubits are in big-endian order, e.g. $|q_0 q_1 q_2 q_3\rangle = |0101\rangle = |5\rangle$. The output is a list of complex amplitudes. The
-complex number at index $k$ is the amplitude for state $| q_0 \dotsb q_n \rangle = | k \rangle$.
+that qubits are in big-endian order, e.g. $|q_0 q_1 q_2 q_3\rangle =
+|0101\rangle = |5\rangle$. The output is a list of complex amplitudes. The
+complex number at index $k$ is the amplitude for state $| q_0 \dotsb q_n \rangle
+= | k \rangle$.
